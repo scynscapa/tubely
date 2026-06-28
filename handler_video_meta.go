@@ -95,7 +95,15 @@ func (cfg *apiConfig) handlerVideoGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, video)
+	// respondWithJSON(w, http.StatusOK, video)
+
+	returnVideo, err := cfg.dbVideoToSignedVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to process signed video", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, returnVideo)
 }
 
 func (cfg *apiConfig) handlerVideosRetrieve(w http.ResponseWriter, r *http.Request) {
@@ -116,5 +124,19 @@ func (cfg *apiConfig) handlerVideosRetrieve(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, videos)
+	// respondWithJSON(w, http.StatusOK, videos)
+
+	// var returnVideos []database.Video
+	returnVideos := make([]database.Video, 0)
+
+	for _, vid := range videos {
+		processedVid, err := cfg.dbVideoToSignedVideo(vid)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Unable to process signed video", err)
+			return
+		}
+		returnVideos = append(returnVideos, processedVid)
+	}
+
+	respondWithJSON(w, http.StatusOK, returnVideos)
 }
