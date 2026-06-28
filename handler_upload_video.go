@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -86,11 +89,14 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	io.Copy(tempFile, file)
 	tempFile.Seek(0, io.SeekStart)
 
+	ratio, err := cfg.getVideoAspectRatio(tempFile.Name())
+
 	assetPath := getAssetPath(mediaType)
+	assetPathRatio := fmt.Sprintf("%s/%s", ratio, assetPath)
 
 	_, err = cfg.s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
-		Key:         aws.String(assetPath),
+		Key:         aws.String(assetPathRatio),
 		Body:        tempFile,
 		ContentType: &mediaType,
 	})
@@ -98,7 +104,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		log.Fatalf("failed to upload object, %v", err)
 	}
 
-	url := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, assetPath)
+	url := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, assetPathRatio)
 	video.VideoURL = &url
 
 	err = cfg.db.UpdateVideo(video)
@@ -108,4 +114,51 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+type Streams struct {
+	Streams []Stats `json:"streams"`
+}
+
+type Stats struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+func (cfg *apiConfig) getVideoAspectRatio(filePath string) (string, error) {
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	var buffer bytes.Buffer
+	cmd.Stdout = &buffer
+
+	err := cmd.Run()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var data Streams
+
+	err = json.Unmarshal(buffer.Bytes(), &data)
+	if err != nil {
+		return "", fmt.Errorf("Could not unmarshal json: %s", err)
+	}
+
+	height := data.Streams[0].Height
+	width := data.Streams[0].Width
+
+	ratio := float64(width) / float64(height)
+	landscape := float64(16) / 9
+	portrait := float64(9) / 16
+
+	var ratioString string
+
+	switch {
+	case ratio >= landscape-0.1 && ratio <= landscape+0.1:
+		ratioString = "landscape"
+	case ratio >= portrait-0.1 && ratio <= portrait+0.1:
+		ratioString = "portrait"
+	default:
+		ratioString = "other"
+	}
+
+	return ratioString, nil
 }
